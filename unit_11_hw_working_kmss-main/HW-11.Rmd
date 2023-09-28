@@ -1,0 +1,86 @@
+---
+title: "HW week 11"
+author: "Baughman, S., Kostelc, K., Rejniak, M., Williams, S."
+subtitle: 'w203: Statistics for Data Science'
+
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages and libraries, include=FALSE}
+
+library(tidyverse) 
+library(magrittr)
+library(knitr)
+library(patchwork)
+library(moments)
+library(ggpubr)
+library(readr)
+library(plyr)
+library(cowplot)
+library(lmtest)
+
+```
+
+## Regression analysis of YouTube dataset
+
+You want to explain how much the quality of a video affects the number of views it receives on social media.  **This is a causal question.**
+
+You will use a dataset created by Cheng, Dale and Liu at Simon Fraser University.  It includes observations about 9618 videos shared on YouTube.  Please see [this link](http://netsg.cs.sfu.ca/youtubedata/) for details about how the data was collected.
+
+You will use the following variables:
+
+- views: the number of views by YouTube users.
+
+- rate: the average rating given by users.
+
+- length: the duration of the video in seconds.
+
+You want to use the `rate` variable as a proxy for video quality.  You also include `length` as a control variable.  You estimate the following ols regression:
+
+$$\text{views} =   789 +  2103    \text{ rate} +      3.00 \text{ length} $$
+First, let us load and preview the data.
+
+```{r load data frame, echo=FALSE}
+
+videos_df <- read.table('videos.txt', header = TRUE, sep = "\t", dec = ".")
+glimpse(videos_df)
+
+```
+
+Let's evaluate the model.
+
+```{r model}
+videos_df$y_int = 789
+video_model <- lm(views ~ y_int + I(2103 * rate) + I(3.00 * length), data=videos_df)
+video_model
+
+v_test <- coeftest(video_model)
+v_test
+```
+
+a. Name an omitted variable that you think could induce significant omitted variable bias.  Argue whether the direction of bias is towards zero or away from zero.
+
+An omitted variable that could induce significant omitted variable bias is `age`. As `age` represents the count of the days a given video has been available to view and, therefore, submit a rating, the variable is independent of and precedes views and ratings. Since more time would allow for more ratings to be submitted, it figures that `age` would move the bias away from zero. 
+
+b. Provide a story for why there might be a reverse causal pathway (from the number of views to the average rating).  Argue whether the direction of bias is towards zero or away from zero.
+
+There is a reverse causal pathway between views and average rating.  Since ratings can only follow views, the greater number of views can predicate higher ratings. Furthermore, if the ratings are high, they are likely to be shown in suggested videos or viewers would be more inclined to pick them. Conversely, if there are few views, then the video may only have a smaller--and less representative--number of ratings.
+
+c. You are considering adding a new variable, `ratings`, which represents the total number of ratings.  Explain how this would affect your measurement goal.
+
+```{r model with ratings}
+videos_df$y_int = 789
+video_ratings_model <- lm(views ~ y_int + I(2103 * rate) + I(3.00 * length) + ratings, data=videos_df)
+video_ratings_model
+
+v_test <- coeftest(video_ratings_model)
+v_test
+```
+
+In this case, `ratings`, interestingly, has a statistically significant p-value--as does `length`--indicating a significant effect on the model. However, it should be noted that the `length` also produces a large, statistically significant p-value. Intuitively, `ratings` representing the count of ratings submitted becomes the denominator that divides the sum of submitted ratings. Therefore, `ratings` is accounted for in `rate`.
