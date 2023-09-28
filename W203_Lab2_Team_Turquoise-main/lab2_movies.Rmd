@@ -1,0 +1,505 @@
+---
+title: "Lab2 - Team Turquoise"
+author: "Samantha Williams, Kate Kostelc, Mick Rejniak, Sean Baughman"
+date: "3/20/2022"
+
+output:
+  pdf_document:
+    toc: yes
+    number_sections: yes
+    toc_depth: 2
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+---
+
+\newpage
+\setcounter{page}{1}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages and imports, echo=FALSE, include=FALSE}
+
+if(!require(ggcorrplot)) install.packages("ggcorrplot",repos = "http://cran.us.r-project.org")
+if(!require(stargazer)) install.packages("stargazer",repos = "http://cran.us.r-project.org")
+
+#tinytex::reinstall_tinytex()
+
+library(ggcorrplot)
+library(tidyverse)
+library(patchwork)
+library(stargazer)
+library(sandwich)
+library(lmtest)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(stargazer)
+```
+
+# Introduction
+As researchers for a start-up video streaming service company, we want to maximize viewer subscriptions to our new platform by offering the highest-rated films. Our business model is based on the idea that the more desirable our inventory (i.e., highest-rated), the greater our subscriber base, the greater our subscription revenue. However, by the time a film falls into the highest-rated category, licensing fees skyrocket. To maximize profit and minimize licensing costs, we want to predict which early releases will eventually become the highest-rated.
+	 
+To this end, we will analyze the Internet Movie Database (IMDb) movie data to understand how different movie attributes affect the *meta score* of a movie. The meta score represents the overall, average rating of the movie. Our examination will include factors such as gross receipts, IMDb rating, run time, etc. using a selection of the top 1,000 movies.
+
+# Data Set and Research Design
+To build a model that determines the titles that should be included in our online streaming platform's inventory, we will utilize Kaggle’s IMDb Movies data set that contains 1,000 records with 16 columns that describe the top 1,000 highest IMDb-rated movies from 1920 through 2020. In 1990, IMDb began as fan-operated database of mostly films and television series and has grown to include information related to video games and streaming content online. It is now a subsidiary of Amazon. As of March 2022, the database contained approximately 10 million titles (605,284 movie titles) with more than 6.7 million user reviews.  According to IMDb, the site has 83 million registered users that use its free and pro versions of the site.
+
+## Data Format and Access
+IMDb does not have an API for automated queries so this data is scrapped directly from the IMDb website and then provided by Kaggle with movie-related data provided in English. For our purposes we will be interested in the following columns provided by the Kaggle data set:
+
+```{r dataset load and prep, echo=FALSE, warning=FALSE, include=FALSE}
+# Load dataset
+movies <- read_csv("data/imdb_top_1000.csv", show_col_types = FALSE)
+glimpse(movies)
+# Clean up the genre field so separators work cleanly
+movies$Genre <- str_replace_all(movies$Genre, 'Sci-Fi', 'SciFi')
+movies$Genre <- str_replace_all(movies$Genre, 'Film-Noir', 'FilmNoir')
+movies$Genre_Original <- movies$Genre
+# Split runtime so units can be evaluated as numeric
+movies <- movies %>% 
+  separate(Runtime, c('Runtime', 'Runtime_Units'), convert=TRUE)
+# Split genres into multiple columns
+movies <- movies %>% 
+  separate(Genre, c('Genre1', 'Genre2', "Genre3"))
+# Split Genre into grouped indicator variables
+movies$Is_Drama <- ifelse(as.integer(str_detect(movies$Genre_Original,"Drama")), 1, 0)
+movies$Is_CrimeMystery <- ifelse(as.integer(str_detect(movies$Genre_Original,"Crime") 
+    | as.integer(str_detect(movies$Genre_Original,"Mystery"))), 1, 0)
+movies$Is_ActionAdventureThrillerWarSport <- ifelse(as.integer(str_detect(movies$Genre_Original,"War") 
+    | as.integer(str_detect(movies$Genre_Original,"Action"))
+    | as.integer(str_detect(movies$Genre_Original,"Sport"))
+    | as.integer(str_detect(movies$Genre_Original,"Adventure"))
+    | as.integer(str_detect(movies$Genre_Original,"Thriller"))), 1, 0)
+movies$Is_Biography <- ifelse(as.integer(str_detect(movies$Genre_Original,"Biography")), 1, 0)
+movies$Is_Western <- ifelse(as.integer(str_detect(movies$Genre_Original,"Western")), 1, 0)
+movies$Is_Comedy <- ifelse(as.integer(str_detect(movies$Genre_Original,"Comedy")), 1, 0)
+movies$Is_Animation <- ifelse(as.integer(str_detect(movies$Genre_Original,"Animation")), 1, 0)
+movies$Is_Horror <- ifelse(as.integer(str_detect(movies$Genre_Original,"Horror")), 1, 0)
+movies$Is_History <- ifelse(as.integer(str_detect(movies$Genre_Original,"History")), 1, 0)
+movies$Is_Film_Noir <- ifelse(as.integer(str_detect(movies$Genre_Original,"FilmNoir")), 1, 0)
+movies$Is_FantasySciFi <- ifelse(as.integer(str_detect(movies$Genre_Original,"Fantasy") 
+    | as.integer(str_detect(movies$Genre_Original,"SciFi"))), 1, 0)
+movies$Is_Family <- ifelse(as.integer(str_detect(movies$Genre_Original,"Family")), 1, 0)
+movies$Is_MusicMusical <- ifelse(as.integer(str_detect(movies$Genre_Original,"Music") 
+    | as.integer(str_detect(movies$Genre_Original,"Musical"))), 1, 0)
+movies$Is_Romance <- ifelse(as.integer(str_detect(movies$Genre_Original,"Romance")), 1, 0)
+# Algorithm
+# 1. Loop through each movie and:
+# 2. Count the number of actors listed per movie
+# 3. Split the movie score amongst the actors
+# 4. Update the dictionary of actors and scores in a dataframe
+# 5. Go through each movie and calculate an actor score (via lookup)
+# Get unique actor list
+a1 <- data.frame(movies$Star1)
+colnames(a1) <- c('Actor')
+a2 <- data.frame(movies$Star2)
+colnames(a2) <- c('Actor')
+a3 <- data.frame(movies$Star3)
+colnames(a3) <- c('Actor')
+a4 <- data.frame(movies$Star4)
+colnames(a4) <- c('Actor')
+actors_combined = rbind(a1,a2,a3,a4)
+unique_actors = data.frame(table(actors_combined))
+colnames(unique_actors) <- ('Actor')
+# Placeholder variable for score
+unique_actors$score <- 0.0
+# Loop through each movie
+for (row in 1:nrow(movies)) {
+    actor1  <- movies[row, "Star1"]
+    actor2 <- movies[row, "Star2"]
+    actor3 <- movies[row, "Star3"]
+    actor4 <- movies[row, "Star4"]
+    imdb_rating <- as.numeric(movies[row, "IMDB_Rating"])
+    
+    movie_actor_count <- 0
+    
+    # Count the actors
+    if (nchar(actor1) > 0) {
+      movie_actor_count <- movie_actor_count + 1  
+    }
+    
+    if (nchar(actor2) > 0) {
+      movie_actor_count <- movie_actor_count + 1  
+    }
+    
+    if (nchar(actor3) > 0) {
+      movie_actor_count <- movie_actor_count + 1  
+    }
+    
+    if (nchar(actor4) > 0) {
+      movie_actor_count <- movie_actor_count + 1  
+    }
+    
+    # Get the score
+    current_movie_score <- movies[row, "IMDB_Rating"] / movie_actor_count
+    
+    # Set score Actor 1
+    temp_index <- which(unique_actors$Actor == as.character(actor1))
+    temp_score <- unique_actors$score[temp_index]
+    new_score <- as.numeric(temp_score + current_movie_score)
+    unique_actors$score[temp_index] = new_score
+    
+    # Set score Actor 2
+    temp_index <- which(unique_actors$Actor == as.character(actor2))
+    temp_score <- unique_actors$score[temp_index]
+    new_score <- as.numeric(temp_score + current_movie_score)
+    unique_actors$score[temp_index] = new_score    
+    
+    # Set score Actor 3
+    temp_index <- which(unique_actors$Actor == as.character(actor3))
+    temp_score <- unique_actors$score[temp_index]
+    new_score <- as.numeric(temp_score + current_movie_score)
+    unique_actors$score[temp_index] = new_score
+    # Set score Actor 4
+    temp_index <- which(unique_actors$Actor == as.character(actor4))
+    temp_score <- unique_actors$score[temp_index]
+    new_score <- as.numeric(temp_score + current_movie_score)
+    unique_actors$score[temp_index] = new_score
+    
+    # Debug print info - ignore
+    #    if (row < 5) {
+    #      print(paste(title, ',', actor1, ',', actor2, ',', actor3, ',', actor4, ',', imdb_rating, '|',         movie_actor_count, #current_movie_score))
+#    }
+    
+}
+# Update movie to reflect score based on actors
+for (row in 1:nrow(movies)) {
+    actor1  <- movies[row, "Star1"]
+    actor2 <- movies[row, "Star2"]
+    actor3 <- movies[row, "Star3"]
+    actor4 <- movies[row, "Star4"]
+    #Get each actors score via lookup
+    actor1_score_index <- which(unique_actors$Actor == as.character(actor1))
+    actor1_score <- unique_actors$score[actor1_score_index]
+    
+    actor2_score_index <- which(unique_actors$Actor == as.character(actor2))
+    actor2_score <- unique_actors$score[actor2_score_index]
+    
+    actor3_score_index <- which(unique_actors$Actor == as.character(actor3))
+    actor3_score <- unique_actors$score[actor3_score_index]
+    
+    actor4_score_index <- which(unique_actors$Actor == as.character(actor4))
+    actor4_score <- unique_actors$score[actor4_score_index]
+    
+    # Calculate total actor score
+    movie_actor_score <- actor1_score + actor2_score + actor3_score + actor4_score
+    
+    # Score movie actor score
+    movies[row,"Total_Actor_Score"] <- movie_actor_score
+}
+
+```
+
+- `Series_Title`: Name of the movie.
+
+- `Released_Year`: The year in which that movie released.
+	 
+- `Runtime`: Total run time of the movie in minutes. 
+	 
+- `Genre`: Indicates the genre of the movie. A film may fall into more than one category of film genre. We have broken this out into single variables to analyze genre as it relates to our variables of interest.
+	 
+- `IMDB_Rating`: Registered users are invited to rate titles on a scale of 1 to 10 on any released title within the database. A title is considered released if it was shown publicly at least once. IMDb applies a weighted mean to determine the final rating. Prior formulas were published and used the equivalent of a Bayesian posterior mean. However, their current formula is unknown, but IMDb does state that their current formula will prevent ballot-stuffing. Each user may vote as often as they'd like, but any new vote on the same title will overwrite their previous vote. The film with the highest IMDb score (9.3) is The Shawshank Redemption. There are no missing values for this section. 
+
+- `Meta_score`: Metascore is the rating of a film ranging from 0 to 100 based on the weighted average of at least four professional critics’ reviews from newspapers, magazines, or other publications. The higher the score, the more positive the movie review. After examining this variable in our data set, there are 157 missing values. This data set contains a film with the lowest score of 28 and 12 films with the maximum score of 100.
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+hist(movies$Meta_score, labels=comma, main='Metascore', xlab="Meta Score from 0-100", breaks = 30)
+```
+
+- `Director`: Name of the Director.
+
+- `No_of_votes`: The total number of users who have voted for the film. 
+
+- `Genre`: Indicates the genre of the movie. A film may fall into more than one category of film genre. We have broken this out into single variables to analyze genre as it relates to our variables of interest.
+
+- `Gross`: This is money earned by the movie. This is not adjusted for inflation or changes in movie ticket prices. These are rough estimates and are based on cumulative figures as compared to weekend gross. It is not clear from this data set if the gross is referring to worldwide, Non-USA, or USA only figures. We will assume that they are USA figures since that is the default displayed. Gross has a range of $1,305 to $936,662,225 with 169 missing data points. It does appear that franchise films seem to be the most financially successful based on our initial EDA.  
+  
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE} 
+
+ggplot(movies, aes(x=Gross)) + 
+  geom_histogram(bins = 30) +
+  scale_x_continuous(labels = comma) +
+  labs(title = 'Gross Revenue', x = "Revenue Dollars", y = "Count")  
+
+```  
+
+- `Star1`,`Star2`,`Star3`,`Star4`: There are four actors listed for each film. We have created a dummy variable called `Total_Actor_Score` to identify any advantage of having a certain actor or a combo of actors as part of the cast of the film.   
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+hist(movies$Total_Actor_Score, labels=comma, main='Total Actor Score', xlab="Score", breaks = 40)
+```   
+
+### Calculating Total Actor Score
+
+Each movie has four actors that starred in the movie listed in the variables `Star1`, `Star2`, `Star3`, `Star4`. Given the number of unique actors (`r nrow(unique_actors)`) and the size of our dataset (`r nrow(movies)` movies), it wouldn't be feasible to produce dummy variables to indicate whether or not an actor starred in a movie. Instead, we formulated a score for each individual actor as described below:
+
+\[
+Actor's\ Score\ Per\ Movie = IMDb\ Rating\ of\ the\ Movie \div Number\ of\ Actors\ in\ the\ Movie
+\]
+An actor will receive points for the score of the movie (`IMDB_rating`), and these points are shared equally amongst the actors in the movie.  Once a score for a single movie is calculated, the actor's respective points are then added to the actor's individual score.
+\[
+Individual\ Actor's\ Score = \Sigma \ Actor's\ Score\ _{\ Each\ Movie}
+\]
+
+Once all of the actor's individual scores have been tabulated, then each movie is given a score that is generated by summing each actor's individual score.
+
+\[
+Movie's\ Total\_Actor\_Score = Actor\ 1_{Score} + Actor\ 2_{Score} + Actor\ 3_{Score} + Actor\ 4_{Score}
+\]
+
+For example:
+
+Interstellar's `IMDB_Rating` was 8.6, so each Actor in Interstellar receives `r 8.6/4` points for this movie, and that score is added up in their Actors Total Score.  In this case, `r 8.6/4` points are added to Jessica Chastain's total score, which ends up being 4.150.
+
+Then, to compute Interstellar's Total Actor Score, the following values were referenced and summed:
+
+|Actor|Individual Actor's Score|
+|---|--:|
+|Matthew McConaughey |12.000|
+|Anne Hathaway |6.150|
+|Jessica Chastain |4.150|
+|Mackenzie Foy |4.075|
+|---|---|
+Interstellar's Total_Actor_Score|26.375|
+
+```{r glimpse final dataset, echo=FALSE, inclue=FALSE}
+# Preview final dataset
+#glimpse(movies)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+#Missing value check of all columns
+colSums(is.na(movies))
+```
+  
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+#Range of $1,305 to $936,662,225
+summary(movies$Gross)
+ggplot(movies, aes(x=Gross)) + 
+  geom_histogram(bins = 30) +
+  scale_x_continuous(labels = comma) +
+  labs(title = 'Gross Revenue', x = "Revenue Dollars", y = "Count")
+
+summary(movies$Meta_score)
+#157 film titles have missing values. Lowest is 28 and highest is 100. 
+sum(is.na(movies$Meta_score))
+hist(movies$Meta_score, labels=comma, main='Metascore', xlab="Meta Score from 0-100", breaks = 30)
+
+summary(movies$IMDB_Rating)
+#no missing values with the lowest rating being a 7.6 and the highest being 9.3.
+sum(is.na(movies$IMDB_Rating))
+hist(movies$IMDB_Rating, labels=comma, main='IMDB Rating', xlab="IMDB Rating from 0-10", breaks = 20)
+
+summary(movies$Runtime)
+#Runtime min 45 min and max is 321 minutes
+hist(movies$Runtime, labels=comma, main='Runtime', xlab="Time in mintues", breaks = 40)
+
+summary(movies$Total_Actor_Score)
+#Runtime min 45 min and max is 321 minutes
+hist(movies$Total_Actor_Score, labels=comma, main='Total Actor Score', xlab="Score", breaks = 40)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+#Looking at who has directed the most movies
+table(movies$Director, useNA = "ifany")
+maximum <- movies %>% 
+  count(Director, sort = TRUE) %>% 
+  slice_max(n)
+maximum
+```
+
+```{r include=FALSE}
+#Top 15 Highest Grossing Movies
+highest_gross <- movies[order(movies$Gross,decreasing = T),][1:15,]
+highest_gross
+
+#Top 15 Highest Meta_score Movies
+highest_meta <- movies[order(movies$Meta_score,decreasing = T),][1:15,]
+highest_meta
+
+#Top 15 Highest IMDB_Rating Movies
+highest_imdb <- movies[order(movies$IMDB_Rating,decreasing = T),][1:15,]
+highest_imdb
+
+#Top 15 Movies with the Longest Runtime
+highest_runtime <- movies[order(as.numeric(movies$Runtime),decreasing = T),][1:15,]
+highest_runtime
+```
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+#Interesting that the Franchise films seem to be doing the best in the top 15 of highest grossing films. 
+ggplot(highest_gross, aes(x = Gross,y = reorder(Series_Title, Gross))) +
+  geom_col(aes(fill = Gross), show.legend = F) +
+  labs(title = "Top 15 Highest Grossing Movies", x = "Gross Revenue", y = NULL) +
+  geom_label(aes(label = comma(Gross)), hjust = 1) 
+
+ggplot(highest_meta, aes(x = Meta_score,y = reorder(Series_Title, Meta_score))) +
+  geom_col(aes(fill = Meta_score), show.legend = F) +
+  labs(title = "Top 15 Movies with Highest Meta Score", x = "Score", y = NULL) +
+  geom_label(aes(label = comma(Meta_score)), hjust = 1) 
+
+ggplot(highest_imdb, aes(x = IMDB_Rating,y = reorder(Series_Title, IMDB_Rating))) +
+  geom_col(aes(fill = IMDB_Rating), show.legend = F) +
+  labs(title = "Top 15 Movies with Highest IMDB_Rating", x = "Rating", y = NULL) +
+  geom_label(aes(label = comma(IMDB_Rating)), hjust = 1) 
+
+#Is there a limit on attention span for high grossing films? 
+ggplot(movies,aes(x=Runtime,y=Gross)) + 
+  geom_point() + 
+  scale_y_continuous(labels = comma) +
+  labs(title='Runtime and Gross',x='Runtime',y='Gross')
+``` 
+
+## Research Design
+Our goal in conducting this study is to understand the relationship between a film's `Meta_score` and its `gross` and help us answer the question: “Does a commercially successful (`Gross`) movie become a highly rated movie (`Meta_Score`)?” Our investigation will focus on whether or not there's a positive correlation between a movie's ability to make money and its critical acclaim. 
+
+To help us dive into this question we will use the variable `Meta_score` as our outcome variable of interest. This was an ideal choice as most professional critics films are permitted to watch the film well before they are released publicly in order to write their reviews in time to generate buzz. It is relatively normally distributed, with a slight positive skew. The variable `Gross` will be our primary beta which is heavily skewed. We will examine the impact of additional variables `IMDB_Rating` and our calculated `Total_Actor_Score` in subsequent models. Our study takes care to focus on variables of movies that exist early in a movie's lifecycle to ensure that we are able to make decisions on a film as early as possible. 
+
+Ultimately, we will reject or fail to reject the null hypothesis that there is no impact of gross receipts on meta score.
+
+## Models
+Based on the correlation plot, we will be evaluating three models. 
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+movies_corr <- na.omit(movies)
+corr_matrix <- cor(movies_corr[,c('Meta_score','IMDB_Rating','Gross','No_of_Votes', 'Runtime', 'Total_Actor_Score')])
+ggcorrplot(corr_matrix,hc.order = TRUE,lab=TRUE) + ggtitle("Correlation Between Important Predictors")
+```
+  
+### Model One
+For the first model we are examining only the primary beta without any covariates, the `Gross` variable:
+$$Meta\_score=\beta_0 + \beta_1(Gross)$$
+
+```{r models, include=FALSE}
+model_one <- lm(Meta_score ~ Gross, data=movies)
+model_one
+             
+model_two <- lm(Meta_score ~ Gross + IMDB_Rating, data=movies)
+model_two  
+  
+model_three <- lm(Meta_score ~ Gross + IMDB_Rating + Total_Actor_Score, data = movies)
+model_three  
+``` 
+
+### Model Two
+For the second model we are examining the primary beta (`Gross`) with the covariate of `IMDB_Rating`:
+$$Metascore=\beta_0 + \beta_1(Gross) + \beta_2(IMDBRating)$$
+
+### Model three
+For the second model we are examining the primary beta (`Gross`) with the covariates of `IMDB_Rating` and `Total_Actor_Rating`:
+$$Metascore=\beta_0 + \beta_1(Gross) + \beta_2(IMDBRating) + \beta_3(Total ActorScore)$$
+
+```{r residuals, echo=FALSE, include=FALSE}
+
+#This takes a while to run and is big and messy. 
+#model_one$residuals
+#model_two$residuals
+#model_three$residuals
+
+ggplot(data = model_one, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+ggplot(data = model_two, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+ggplot(data = model_three, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+```
+
+```{r coefficients, include=FALSE}
+
+#we are going to need to a transform. Thoughts on what to use? 
+model_one$coefficients
+model_two$coefficients
+model_three$coefficients
+
+```
+
+
+# Results
+```{r lm table rendering, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+stargazer(model_one, model_two, model_three, type="latex", title="Movie OLS Model Results")
+```
+
+Our alternate hypothesis tested “Does a commercially successful (Gross) movie become a highly rated movie (Meta_Score)?”, and we found that Gross revenue does not have a statistically significant effect on a movie's Meta_Score, and therefore, failed to rejet our null hypothesis.
+
+Model 1, which solely looked at `Gross` related to `Meta_Score`, had zero (0.0000) effect as seen in Table X and produced a negligible R^2^ of only 0.001.
+
+In Model 2, we added in `IMDB_Rating` as a new beta, and we did find it to be statistically significant with a p-value of < 0.01. `IMDB_Rating` correlated positively with the `Meta_Score`, so an increase in an IMDB rating would increase a `Meta_Score.`  The intercept of the model was negative, and this should be ignored because it's impossible to get a negative rating. The R^2^ of Model 2 was only 0.084, so this still fails to account for even 10% of the overall variance in the dataset.
+
+In Model 3, we added in `Total_Actor_Score` as a new beta, and it also affected `Meta_Score` with a statistically significant effect and a p-value of < 0.05.  `Total_Actor_Score` was negatively sloped so it will draw the regression model slightly closer back to zero.  Again, the R^2^ of Model 3 was 0.089, so ~9% of the variance in this model is explained by these betas.  The intercept was also negative, which should be ignored because it is not practically possible to get a negative rating.
+
+In practical terms, this means that a movie's gross revenue has little or nothing to do with how successful it is rated according to its `Meta_Score`.  Other factors such as `IMDB_Rating` and `Total_Actor` score did explain 8.9% of the variance in our dataset, but this R^2^ score is still very low which means that are other factors that influence `Meta_Score` that this dataset was not able to explain.
+
+In terms of our business problem, we should look to evaluate data elements like our customer's views of these movies in our service and other indicators that might be able to predict outcomes with greater certainty.  It is clear that Gross revenue is not a valid predictor.  Just because people pay to see a movie, it doesn't mean that it's good.  It's also hard to predict a movie will be successful in terms of a `Meta_Score`, as most of the data points are lagging indicators.  We recommend further study and analysis in this area.
+  
+From this model, we can see that for a score of 77.71, the film's `Gross` will not have a perceived impact with a change of -0.000000003372 for every point increase.   
+
+## Model Limitations
+
+### Statistical limitations of Model
+A statistical concern, or limitation, of our model is the data's lack of independence. The movies in our data are produced through time. In other words, a movie that follows a preceding movie is very likely influenced by its predecessors. In addition, the production of high-grossing and popular movies tends to come from the movie industry in Hollywood, California. This insular production phenomenon can result in competitive and creative interactions, otherwise known as strategic interactions, as well as clustering risks given the movies limited geographic origins. These potential violations of the large sample assumption of independence must be recognized as potential limitations in our model's validity.
+
+### Structural limitations of Model
+The relationship between variables explaining human behavior is complex and interrelated. The overall outcome is to generate a predictor of human behavior, a predictor of what movies will generate the most views on the new streaming platform. The models include the variables of the film's `Gross`, `IMDB_Rating`, and `Total_Actor_Score.` Many other factors may contribute to the number of views on a streaming platform. Some of these factors were omitted by choice, while others were not available at the analysis time. 
+
+### Intentionally Omitted Variables
+The movie title and the year the movie was released were both intentionally omitted from the models. This data had been collected and was available at the time of analysis but was omitted as it was determined it had little impact on the viewability of the movie on the new streaming platform.
+
+### Further Examination
+Two factors that could impact Meta scores were runtime and genre of movie. Runtime ranged from 45 minutes to 321 minutes with an expected value of 123 minutes. The amount of time a movie takes to run may influence its attractiveness to viewers. Further examination of this variable is suggested.  
+
+The genre of the movie may also influence its attractiveness to viewers. Popular genres of the times could guide more viewers to stream a movie. Many movies are classified into multiple genres, such as “Action, Adventure” or “Drama, Action, Biography, Crime”. The double or triple classification can make selecting a genre that will draw viewers to the streaming platform challenging and unpredictable. While further examination of the relationship between genre and the number of viewers streaming the movie is suggested, the current models omitted genre to maximize the models' reliable predictive power. 
+
+### Unintentionally Omitted Variables
+Factors not available at the time of analysis include, but are not limited to:
+
+- Total Movie Budgets
+- Number and Types of Awards and Honors the Movie received
+- Number and Locations of Countries where the movie was released 
+- Genre Fan Base Size
+- Pre-existing Fan Base Size (from books or other media types)
+- Number of languages the movie was translated into
+- Adjusted Gross (movies over five years old)
+- The number of times the film has been released 
+
+Omitted variables, both intentionally and unintentionally omitted variables, can potentially impact and influence the bias of the models. These factors may change the model's overall fit to reality and sway the model's predictive power. Three unintentionally omitted factors that were not available at the time of analysis that could impact the fit of the models are total movie budget, number and types of awards and honors the movie received, and number and locations of countries where the film was released.
+
+Total Movie Budget
+A movie may have a large budget for many reasons, high profile actors or directors, large casts, intricate sets and costumes, complicated stunts, large advertising campaigns, or complications with production. Some of these factors may positively influence the outcome of viewership, but others may negatively affect the streaming of a movie. Therefore, the influence of budget on the current coefficients is unknown and needs further exploration. The 1000 movies in the IMDB dataset would need to be coordinated with other datasets to fill the budget amounts for every 1000 movies on the list. Compiling the data may take multiple datasets since the range of film spans numerous decades, different movie studios, and a wide range of genres. 
+
+Number and Types of Awards and Honors the Movie Received
+From Oscars to BAFTA, a movie can gain many awards and honors. Awards and honors may increase the public’s desire to watch the film. Awards can bring visibility to a movie that did not have a large advertising budget, showcase a new rising actor or celebrate the life of a well-known one, and get a movie to a country or audience that has never been exposed to the film.  Due to all of these interactions, the number and types of awards may positively affect the streaming viewership. This positive relationship may alter the coefficients and result in a better fit model to reality. The number and type of awards may have a positive bias and pull the model away from zero. 
+
+Number and Locations of Countries where the Movie was Released 
+Movies are released all over the world to a variety of audiences. Often, movies are even dubbed into a wide range of languages to reach a greater audience better. Films with the budget and the audience base to be released in more countries are more likely to have a larger audience. Therefore, the effect of the number of countries the movie is released in, and viewership of a movie on the new streaming platform is predicted as a positive relationship. Further exploration should be completed to fully realize the impact of the number of countries the film is released in and the rating. If the relationship is positive, the bias will draw the model coefficients away from the zero of reality. Multiple data sources will need to be mined to generate information about each of the 1000 movies in the IMDB dataset. 
+
+# Conclusion
+
+## Overall Conclusion 
+
+This exploration aimed to investigate the predictive factors of a movie’s streaming success before it was released to the public in the hope of biding for films for the new streaming platform. The relationship between Metascore, the calculated combined reviews scores published by at least four different critics, and the total movie gross. 
+
+Metascore is not impacted by the total movie gross, and therefore gross is not a predictive measure of how well the movie will be rated. Other evaluated factors affecting Metascore were IMDb rating and Total Actor Score, derived from the ranking of actors and number of appearances in the top 1000 movies on IMDb. IMDb rating is a post-hoc measure of a film and would not help to determine which movies to bid for but may be used to bolster predictive models. Total Actor Score could be used as a predictive measure of a movie's success since the listing of actors precedes the film's release to the public. 
+
+Observationally, Metascore and IMDb ratings did not match. Therefore, the experts' opinions did not correspond to the general public’s ranking of movies on IMDb. The objective is to acquire films that the public will want to watch and incentivize them to join the new platform.
+
+## Further Study
+
+As the dataset from IMDb was explored, other factors of a predictive nature revealed themselves, such as genre, total budget, total runtime, number of countries the film was released in, awards earned by the film, and the pre-existing fan base from other media. While some of these factors were available in the dataset, some were not and would need to be added in the future. Further study is recommended for the genre, pre-existing fan base films, and total budget of these factors. These factors' effect on the public’s movie rating could help determine which films to bid on for the new streaming platform. 
+
