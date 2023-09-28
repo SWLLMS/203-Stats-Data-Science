@@ -1,0 +1,351 @@
+---
+title: "Lab One, Part One"
+author: "Samantha Williams, Varune Maharaj, Wilford Bradford, Dmitri Zadvornov"
+date: "Feb 26, 2022"
+output:
+  pdf_document:
+    toc: yes
+    number_sections: yes
+    toc_depth: 3
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+---
+
+# Part 1: Foundational Exercises
+## Professional Magic
+Utilizing available information, let $U_i = X_i + Y_i$. 
+Then with a given joint
+distribution of $X_i$ and $Y_i$ we can calculate distribution function of $U_i$
+as follows:
+
+$P[U = 0] = P[X_i = 0, Y_i = 0] = \frac{p}{2}$
+
+$P[U = 1] = P[X_i = 1, Y_i = 0] + P[X_i = 0, Y_i = 1] = \frac{1-p}{2} + 
+\frac{1-p}{2} = 1 - p$
+
+$P[U = 2] = P[X_i = 1, Y_i = 1] = \frac{p}{2}$
+
+Then the distribution of $U_i$ is:
+
+$f_U(u)=
+\begin{cases}
+  \frac{p}{2}, u = 0 \\
+  1-p, u = 1  \\
+  \frac{p}{2}, u = 2  \\
+  0, otherwise
+\end{cases}$
+
+Finally, $X_1+Y_1+X_2+Y_2+X_3+Y_3 = U_1 + U_2 + U_3$.
+
+**1. Calculating type 1 error rate - $\alpha$**
+
+$\alpha = P[\text{rejecting }H_0|H_0] = 
+P\left[\sum_{i=1}^3 U_i=0 \cup \sum_{i=1}^3 U_i=6\,\middle|\,p=\frac{1}{2}\right]$.
+
+Given that events $\sum_{i=1}^3 U_i=0$ and $\sum_{i=1}^3 U_i=6$ are 
+mutually exclusive:
+
+$P\left[\left(\sum_{i=1}^3 U_i=0\right)\cup
+\left(\sum_{i=1}^3 U_i=6\right)\,\middle|\,p=\frac{1}{2}\right] = \\
+P\left[\sum_{i=1}^3 U_i=0\,\middle|\,p=\frac{1}{2}\right] + 
+P\left[\sum_{i=1}^3 U_i=6\,\middle|\,p=\frac{1}{2}\right] = \\
+2\left(\prod_{i=1}^3 \frac{p}{2}\right)\left.\middle|_{p=\frac{1}{2}}\right. = 
+\left.2\frac{p^3}{8}\middle|_{p=\frac{1}{2}}\right. =
+\frac{1}{4}\frac{1}{8} = \frac{1}{32} = 0.03125\\$
+
+**2. Calculating power $(1 - \beta)$ of the test**
+
+$power = P[\text{rejecting }H_0|H_a] = 
+P\left[\sum_{i=1}^3 U_i=0\,\middle|\,p=\frac{3}{4}\right] + 
+P\left[\sum_{i=1}^3 U_i=6\,\middle|\,p=\frac{3}{4}\right] = \\
+2\left(\prod_{i=1}^3 \frac{p}{2}\right)\left.\middle|_{p=\frac{3}{4}}\right. = 
+\left.2\frac{p^3}{8}\middle|_{p=\frac{3}{4}}\right.=\frac{1}{4}\frac{27}{64} =
+\frac{27}{256} = 0.1054$
+
+
+```{r package loads, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(wooldridge)
+library(ggplot2)
+library(knitr)
+library(e1071)
+library(Hmisc)
+```
+
+```{r read data, include=FALSE} 
+
+data.1.3.1 <- read_csv(file = 'datasets/happiness_WHR.csv')
+data.1.3.2 <- read_csv(file = 'datasets/legislators-current.csv')
+data.1.3.3 <- wine
+data.1.3.4 <- read_csv(file = 'datasets/GSS_religion.csv')
+
+```
+## Wrong Test, Right Data
+
+### General requirements of a paired t-test: 
+- Must be IID
+- Data must be metric
+- Each paired measurement must be obtained from the same customer
+- The distribution of differences between the paired measurements are 
+sufficiently normally distributed (more important for small sample size 
+than for larger sample size)
+  
+### Consequences of a paired t-test using the data provided:
+A paired t-test is used to test if the _mean_ difference between two pairs of 
+measurements is zero or not. This is a statistical test that is not designed 
+for this type of data. 
+
+We are provided ordinal data that ranks a respondent's opinion of a company's 
+mobile and regular website on 5-point Likert scale. It is important to mention 
+that the ordinal scale does not capture the true distance between consecutive
+levels on the scale, in which case the mean calculation and mean comparison 
+do not have a meaning, potentially misrepresenting both quantities in either 
+direction - understating or overstating, as well as misrepresenting the center 
+and the spread of the distribution.
+
+Performing a test that requires metric data with an ordinal-scale data would 
+result in an inaccurate description of the relationship between customer 
+preference of the company's mobile site vs. the regular website. Because we 
+cannot accurately measure the difference in scores, we may assume that the data 
+is not a normal or t- distribution regardless of the sample size.
+
+### Solution to properly asses this data set:
+Perform a **Wilcoxon sign test** which compares the sample _median_ against a 
+hypothetical median where the null hypothesis for this test is the medians of 
+two samples are equal. This test is non-parametric and requires ordered 
+categorical variables that do not have to be metric (ordinal data) that is 
+IID. Given the information provided this would be a better statistical test to 
+explore, whether the sites were not equally liked in one or both directions
+(mobile website vs. regular website) by the customers sampled.
+
+
+## Test Assumptions
+### World Happiness
+Given that the two-sample t-test is utilized, the following assumptions
+must hold:
+
+1. Underlying random variables $X$ and $Y$ are metric
+1. $X_i$ and $Y_i$ are IID
+1. Size of the sample is large enough relative to the distribution degree of 
+skewness
+1. Equal Variance for underlying group distributions
+
+```{r slice data, echo=FALSE}
+data131 <- data.1.3.1[c("Life Ladder","Log GDP per capita")]
+colnames(data131) <- c("ladder","log_gdp")
+```
+
+**1. Metric Scale:** Reviewing underlying data, the variable for happiness is 
+measured on the ordinal scale, as it represents the level of happiness on the 
+scale of 0-10, where the distance of 1 between levels 9 and 10 would not 
+necessarily be the same as the distance of 1 between 0 and 1. In fact, negative 
+feelings are affected by negativity bias, which amplifies the magnitude of 
+negative feelings. Further, the t-test statistic is calculated based on the 
+difference of means, which in itself requires at least interval scale. The type 
+of data provided violates this assumption.
+
+**2. Sample value pairs are IID:** Gallup surveys are based on randomly 
+selected and nationally representative samples from more than 140 countries. We can technically assume that they are random enough, but it is also important to note that not all countries are distinct enough based on culture, historical diffusion of language, culture, and customs of neighboring countries, as well as effects from geopolitical structures, such as trade unions and other. This assumption is satisfied.
+
+**3. Size of the sample is large relative to degree of skewness of the 
+distribution:** 
+```{r echo=FALSE}
+# Get the factor for high and low log GDP
+data131$gdp_factor <- data131 %$% factor(
+   ifelse(log_gdp > mean(log_gdp, na.rm=T),"High", 
+          ifelse(log_gdp < mean(log_gdp, na.rm=T), "Low", NA)))
+
+data131_pruned <- data131[c("ladder","gdp_factor")]
+```
+
+We can observe that the lowest category count is 105, which is generally a good sample size for distributions that are not highly skewed.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# let's review the factor
+kable(summary(data131_pruned$gdp_factor), align="l")
+```
+The skewness values for underlying distributions are not extreme and 
+indicate slight left skew of the distributions.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+kable(c(skewness(data131_pruned$ladder[data131_pruned$gdp_factor == "High"], na.rm = T),
+skewness(data131_pruned$ladder[data131_pruned$gdp_factor == "Low"], na.rm = T)), align="l")
+```
+
+Looking at the distribution shapes based on the density histogram, 
+we can confirm that both samples are slightly skewed to the left.
+
+```{r, out.width="80%", echo=FALSE, message=FALSE, warning=FALSE}
+# let's plot samples
+data131_pruned %>% 
+  na.omit() %>%
+  ggplot() + 
+    geom_histogram(aes(y=stat(density), x=ladder, color=gdp_factor), bins=50, freq=T) +
+    facet_grid(~ gdp_factor)
+```
+
+With only a slight skewness and a large sample size, this assumption is satisfied.
+
+**4. Equal Variance for underlying group distributions:** Taking a glance at the plots above we can also conclude that the spread (variance) for both is quite similar. Also calculating sample variance we can confirm that it is very similar between samples. This assumption is satisfied.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+kable(c(var(data131_pruned$ladder[data131_pruned$gdp_factor == "High"], na.rm = T),
+var(data131_pruned$ladder[data131_pruned$gdp_factor == "Low"], na.rm = T)), align="l")
+```
+
+Finally, comparing underlying distributions to the normal we see that 
+skewness have limited effects with left tail being slightly heavier, while the right tail is slightly lighter than the normal distribution.
+
+``` {r, out.width="80%", echo=FALSE, message=FALSE, warning=FALSE}
+# Let's look at the distribution of sample data with respect to normal
+# to test additional assumption: samples either need to be normal or 
+# for CLT need to have finite variance - not too heavy of the tails
+
+data131_pruned %>%
+  na.omit() %>%
+    ggplot() +
+      geom_qq(aes(sample=ladder, color=gdp_factor)) +
+      geom_qq_line(aes(sample=ladder, color=gdp_factor)) +
+      facet_grid(~ gdp_factor) +
+      labs(title="Q-Q plot for underlying sample", x='Theoretical Norm', 
+           y='Sample')
+
+```
+
+**For the left tail:**
+
+So $y$ or sample has smaller lower quantiles than normal - suggesting heavier left tail (e.g. more data on the left than for normal tail), but not too extreme visually.
+
+**For the right tail:**
+
+The sample has smaller quantiles than normal - suggesting lighter right tail than for normal distribution (e.g. more data based on quantiles on the right for normal than sample), but not too extreme visually.
+
+
+Given all of the above information, under CLT assumptions and good sample size this assumption is satisfied.
+
+### Legislators
+#### Assumptions for a Wilcoxon rank-sum test: 
+1. Data must be at least ordinal
+1. Sample pairs are IID
+1. No substantial differences in group sample sizes
+1. Continuous data
+
+A quick review of the data shows us that there are 3 levels for the party.
+Birth information is represented by the birthday. We can operationalize 
+the degree of being old by either using POSIX or calculating age to a 
+specific fixed date. The latter is a cleaner approach.
+
+``` {r, echo=FALSE, message=FALSE, warning=FALSE}
+# Remove independent and reduce to 2 columns
+data132 <- data.1.3.2[data.1.3.2$party != "Independent",c('party','birthday')]
+data132$age <- round(as.numeric(difftime(Sys.time(), data132$birthday, units="days")/365),2)
+
+describe(data132)
+kable(head(data132[c('party','birthday','age')]), align="l")
+
+```
+
+**1. Data must be at least ordinal:** 
+Age data is metric, as intervals between dates carry appropriate meaning, 
+zero has a meaning of not starting life, and the idea of someone 10 years older 
+has a meaning of having 10 years more to the life experience than the other 
+person. As the data scale is above ordinal, the assumption is satisfied.
+
+**2. Sample pairs are IID:** legislators-current data set holds current 
+population information for current serving members of the congress. As such, we are working with the population, and not sample distribution. Independence is required for sample to provide maximum information about the underlying population, but in this case we already have all of the members of the population. As such, we can use the population as is and compare population parameter between groups directly, or draw random samples from existing population set to directly satisfy this requirement.
+
+**3. No substantial differences in group sample sizes:** Based on the summary of the data we obtained before, we have group sizes that do not deviate substantially - 272 vs. 264. This assumption is satisfied.
+
+**4. Continuous data:** The age data is continuous, so this specific assumption is satisfied.
+
+### Wine and health
+
+#### Singed-Rank Test Assumptions:
+1. Non-Parametric 
+1. Paired
+1. Must be IID
+1. Data must be metric
+1. Difference is symmetric
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+kable(head(wine))
+kable(summary(wine))
+```
+
+**1. Non-Parametric:** The data is non-parametric with a small sample size (21). This assumption is satisfied.
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+hist(wine$liver, main='Deaths from Liver Disease', xlab="Liver Disease", breaks = 20)
+hist(wine$heart, main='Deaths from Heart Disease', xlab="Heart Disease", breaks = 20)
+```
+
+**2. Paired:** The wine data is unpaired. There is no dependency between the people who die from liver disease versus heart disease. This assumption is not satisfied.
+
+**3. Must be IID:** This data set may not be IID. While the wine data may be independent, it is not identically distributed across liver and heart disease. This assumption is not satisfied.
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE }
+hd <- density(wine$heart)
+ld <- density(wine$liver)
+plot(ld, main='Deaths from Liver Disease', xlab="Liver Disease")
+plot(hd, main='Deaths from Heart Disease', xlab="Heart Disease")
+```
+
+**4. Data must be metric:** The wine data set is metric with counts of the number of deaths from liver, heart and general deaths per 100,000 people. Alcohol is counted in liters of wine, per capita. This assumption is satisfied. 
+
+**5. Difference is symmetric:** The wine data is slightly asymmetric based on the plot of the distribution of the difference of heart and liver deaths, however it does not violate the assumption. This assumption is satisfied. 
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+death_difference <- wine$heart - wine$liver
+#remember the idea that wine is good for your heart and alcohol is bad for your liver. 
+hist(death_difference, main='Difference of Deaths from Heart and Liver Disease', xlab="Difference", breaks =20)
+d <- density(death_difference)
+plot(d, main='Difference of Deaths from Heart and Liver Disease', xlab="Difference")
+```
+
+### Attitudes toward the religious
+
+#### Assumptions for a paired t-test:
+1. Metric scale data
+1. Paired - dependence within samples
+1. Must be IID
+1. Data must be metric
+1. Difference of between sample values must be sufficiently normal
+
+**1. Metric scale data:** 
+The setup for rating of feelings by the respondents is using thermometer scale, which is on the interval scale. It is not of ratio scale with respect to zero, so the ratios and division may not have a strong meaning.
+
+```{r, out.width="80%", echo=FALSE, message=FALSE, warning=FALSE}
+describe(data.1.3.4)
+```
+
+**2. Paired - dependence within samples:** 
+As response is given by the same subject to 2 types of stimuli, the dependence assumption is satisfied.
+
+**3. Must be IID:** 
+The data is identically distributed however the survey approach uses area probability design that selects respondents based on the GSS code book quotas fulfilled within a given block or segment. This convenience sampling method may not be sufficiently random and as result may not be a true representation of the population of US households. This assumption is not satisfied. 
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+hist(data.1.3.4$prottemp, main = "Protestants Tempature Distribution", xlab='prottemp')
+hist(data.1.3.4$cathtemp, main = "Catholic Tempature Distribution", xlab='cathtemp')
+```
+
+**4. Difference of between sample values must be sufficiently normal:** 
+From the density histogram we can see potentially heavy tails. The Q-Q plot confirms significant deviations from normal distribution in terms of weight of tails. This would mean that the CLT convergence would be much slower and require much large sample size. At the given sample size this assumption does not hold.
+
+```{r, fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE}
+# let's plot samples
+data.1.3.4 %>% 
+  ggplot() + 
+    geom_histogram(aes(y=stat(density), x=(prottemp-cathtemp)), freq=T)
+
+# Let's look at the distribution of sample data with respect to normal
+# to test additional assumption: diff of samples either need to be normal or 
+# for CLT need to have finite variance - not too heavy of the tails
+data.1.3.4 %>%
+  ggplot() +
+    geom_qq(aes(sample=prottemp - cathtemp)) +
+    geom_qq_line(aes(sample=prottemp - cathtemp)) +
+      labs(title="Q-Q plot for underlying diff sample", x='Theoretical Norm', 
+           y='Diff Sample')
+
+```
+

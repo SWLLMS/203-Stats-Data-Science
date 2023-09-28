@@ -1,0 +1,473 @@
+---
+title: "Voting Difficulty as a Rift between Democrats and Republicans"
+author: "Samantha Williams, Varune Maharaj, Wilford Bradford, Dmitri Zadvornov"
+date: "3/02/2022"
+output:
+  pdf_document:
+    toc: yes
+  bookdown::pdf_document2:
+    toc: yes
+    number_sections: yes
+    fig_caption: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+    fig_caption: yes
+    df_print: paged
+---
+\newpage
+\setcounter{page}{1}
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# load required libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(Hmisc) # descriptive
+library(psych, exclude = c('describe','alpha','%+%')) # descriptive by groups
+library(coin) # for effect size calculation
+library(rstatix, exclude = 'filter') # effect size
+library(knitr)
+
+theme_set(theme_bw())
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, show_col_types = FALSE}
+# load data set
+df_init <- read_csv("anes_timeseries_2020_csv_20220210.csv")
+
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# conduct recoding, new variable calculation, wrangling
+#
+# new column names after mapping of given column names
+eda <- c('case_id',
+         'party_id', 
+         'voted', 
+         'voting_difficulty',
+         'vproblem_registration',
+         'vproblem_id',
+         'vproblem_abs_ballot',
+         'vproblem_conf_ballot',
+         'vproblem_transport',
+         'vproblem_wait',
+         'vproblem_work',
+         'vproblem_weather',
+         'vproblem_mail_ballot',
+         'vproblem_other',
+         'nvproblem_main',
+         'nvproblem_other',
+         'vpractical_difficulty',
+         'nvcombined_difficulty'
+)
+
+df_min <- df_init %>% rename(
+  case_id = 'V200001',
+  #pre_party_registration = 'V201018', #binary based on interest
+  #post_party_registration = 'V202064',
+  party_id_sum = 'V201231x', # 0=no answer, 1-3=Democrat, 4=Independent, 5-7=Republican
+  voted = 'V202109x', #binary 0=no vote, 1=vote, -2=not reported
+  voting_difficulty = 'V202119', #ordinal less than 0=No info, 1=Not difficult, 2=Little difficult, 3=Moderately difficult, 4=Very difficult, 5=Extremely Difficult
+  vproblem_registration = 'V202120a', #0=Not mentioned, 1=Mentioned, REGISTRATION PROBLEM
+  vproblem_id = 'V202120b', #CONCERN ABOUT IDENTIFICATION CARD
+  vproblem_abs_ballot = 'V202120c', #DIFFICULTY OBTAINING ABSENTEE BALLOT
+  vproblem_conf_ballot = 'V202120d', #CONFUSION ABOUT BALLOT OR MACHINE
+  vproblem_transport = 'V202120e', #DIFFICULTY GETTING TO POLLING PLACE
+  vproblem_wait = 'V202120f', #LONG WAIT TIMES
+  vproblem_work = 'V202120g', #WORK SCHEDULE
+  vproblem_weather = 'V202120h', #BAD WEATHER
+  vproblem_mail_ballot = 'V202120i', #ISSUE MAILING BALLOT
+  vproblem_other = 'V202120j', #OTHER PROBLEM # vproblem_none = 'V202120k', #NONE AT ALL
+  nvproblem_main = 'V202123', #MAIN REASON R DID NOT VOTE, 1=I forgot, 2=I’m not interested, 3=Too busy, 4=Did not like the candidates, 5=I am not registered, 6=I did not have the correct form of identification, 7=Out of town, 8=Sick or disabled, 9=Transportation, 10=Bad weather, 11=The line at the polls was too long, 12=I was not allowed to vote at the polls, even though I tried 13. I requested but did not receive an absentee ballot, 14=I did not know where to vote, 15=I did not feel that I knew enough about the choices, 16=Other {SPECIFY}
+  nvproblem_other = 'V202124', #OTHER REASON R DID NOT VOTE, 1=I forgot, 2=I’m not interested, 3=Too busy, 4=Did not like the candidates, 5=I am not registered, 6=I did not have the correct form of identification, 7=Out of town, 8=Sick or disabled, 9=Transportation, 10=Bad weather, 11=The line at the polls was too long, 12=I was not allowed to vote at the polls, even though I tried 13. I requested but did not receive an absentee ballot, 14=I did not know where to vote, 15=I did not feel that I knew enough about the choices, 16=Other {SPECIFY}, 17=There were no other reasons {VOL}
+) %>%
+# Mutate/recode data for statistical tests
+  mutate(
+     party_id = # Recode Party ID Summary to text labels
+      case_when(
+        party_id_sum == -9
+        | party_id_sum == -8
+        ~ 'Unknown',
+        party_id_sum == 4
+        ~ 'Independent',
+        party_id_sum == 1
+        | party_id_sum == 2
+        | party_id_sum == 3
+        ~ 'Democrat',
+        party_id_sum == 5
+        | party_id_sum == 6
+        | party_id_sum == 7
+        ~ 'Republican'),
+    # calculate vpractical_difficulty as amount of reported difficulties
+    # this only applies for respondents with status of voted (voted == 1)
+    vpractical_difficulty = (voted == 1) * ((vproblem_registration * 
+                                               (vproblem_registration >= 0)
+       + vproblem_id * (vproblem_id >= 0)
+       + vproblem_abs_ballot * (vproblem_abs_ballot >= 0)
+       + vproblem_conf_ballot * (vproblem_conf_ballot >= 0)
+       + vproblem_transport * (vproblem_transport >= 0)
+       + vproblem_wait * (vproblem_wait >= 0)
+       + vproblem_work * (vproblem_work >= 0)
+       + vproblem_weather * (vproblem_weather >= 0)
+       + vproblem_mail_ballot * (vproblem_mail_ballot >= 0))),
+    # calculate nvcombined_difficulty, which is combination of responses by
+    # respondents for main and other reasons that caused them to not vote 
+    # (vote == 0). The values for each provided reason are counted as follows,
+    # given the subjectively evaluated factor of intent - 
+    # The definition of difficulty applied here is
+    # - respondent made all reasonable efforts to participate in the voting, but
+    # had a difficulty in doing so. Essentially, skipping options that indicate
+    # no intent to vote.
+    #
+    # 1. I forgot - 0 - no intent
+    # 2. I’m not interested - 0 - no intent
+    # 3. Too busy - 0 - no intent
+    # 4. Did not like the candidates - 0 - no intent
+    # 5. I am not registered - 1
+    # 6. I did not have the correct form of identification - 1
+    # 7. Out of town - 0 - no intent (under condition of absentee ballot avail)
+    # 8. Sick or disabled - 1
+    # 9. Transportation - 1
+    # 10. Bad weather - 1
+    # 11. The line at the polls was too long - 1
+    # 12. I was not allowed to vote at the polls, even though I tried - 1
+    # 13. I requested but did not receive an absentee ballot - 1
+    # 14. I did not know where to vote - 1
+    # 15. I did not feel that I knew enough about the choices - 1
+    # 16. Other {SPECIFY} - 0 - intent unknown <=> no intent
+    nvcombined_difficulty = #main/other - 0/0 -> 0, 0/1 -> 1, 1/0 -> 2, 1/1 -> 3
+      (voted == 0) * 2 *
+      case_when(
+        nvproblem_main >= 5
+        & nvproblem_main <= 15
+        & nvproblem_main != 7
+        ~ 1,
+        TRUE ~ 0) + # code "not at all" or "reject to respond" as 0
+     case_when(
+        nvproblem_other >= 5
+        & nvproblem_other <= 15
+        & nvproblem_other != 7
+        ~ 1,
+        TRUE ~ 0) # code "not at all" or "reject to respond" as 0
+  ) %>%
+select(all_of(eda)) %>% 
+  # Next, the data is filtered to remove the rows with non-applicable data - 
+  # the rows, where interview ended prematurely based on indicators
+  # of key variables:
+  # 1. voted, but did not provide voting_difficulty or ended interview before
+  #    providing responses to all the difficulty prompts
+  # 2. did not vote and ended interview before responding to difficulty prompts.
+  # 3. ended interview before voting response was provided
+  filter(!((voted == 1
+           & (voting_difficulty < 0
+             | (vproblem_registration <0 & vproblem_registration != -9)
+             | (vproblem_id <0 & vproblem_id != -9)
+             | (vproblem_abs_ballot <0 & vproblem_abs_ballot != -9)
+             | (vproblem_conf_ballot <0 & vproblem_conf_ballot != -9)
+             | (vproblem_transport <0 & vproblem_transport != -9)
+             | (vproblem_wait <0 & vproblem_wait != -9)
+             | (vproblem_work <0 & vproblem_work != -9)
+             | (vproblem_weather <0 & vproblem_weather != -9)
+             | (vproblem_mail_ballot <0 & vproblem_mail_ballot != -9))
+           )
+           | (voted == 0
+              & ((nvproblem_main < 0 
+                  & nvproblem_main != -8
+                  & nvproblem_main != -9)
+                 | (nvproblem_other < 0
+                    & nvproblem_other != -8
+                    & nvproblem_other != -9))
+           )
+           | (voted < 0)))
+               
+```
+# Importance and Context
+A cornerstone of any democracy is voting rights. A person is eligible to vote if 
+they are 18 years old on or before Election Day, a U.S. citizen, and registered 
+to vote, with some states having additional requirements for voter eligibility. 
+However, there is a long history of tactics that have been used to make voting 
+difficult for various groups. Literacy tests, poll taxes, voter 
+disenfranchisement laws, and fraud are all examples of the tactics used by the 
+two major parties, Democratic and Republican.^[ACLU. “Block the Vote: How 
+Politicians are Trying to Block Voters from the Ballot Box” (2021)] Generally 
+speaking, a voter who identifies as a Republican has conservative social values, 
+prefers a smaller government, and wants to reduce taxes to stimulate the 
+economy, while a voter who identifies as a Democrat tends to have liberal 
+social values, believes that government should be the safety net for all and 
+prefers a progressive tax structure. 
+During the 2020 US Presidential Election, there were claims made by both 
+parties of increased measures to make it more difficult to cast a vote. Efforts 
+to provide safe voting options for all due to the COVID-19 global pandemic, may 
+have been a contributing factor to additional concerns about voting 
+difficulty.^[Levinson-King, R. “US election 2020: Why it can be hard to vote in 
+the US” (2020)] This led to voters questioning their voting experience and 
+wondering if the election process was manipulated for political gain. To gain 
+further insight, this analysis aims to address the following research question:  
+\begin{quote}
+  \textit{Did Democratic voters or Republican voters experience more difficulty 
+  voting in the 2020 election?}
+\end{quote}
+The answer to this question can be pivotal in understanding the voter 
+experience during a global pandemic and if claims that a particular party did 
+have a more difficult voting experience compared to the other. Additionally, it 
+would provide more context for accusations of voter suppression and further 
+clarify if a particular party gained a political advantage from these tactics.
+
+# Data and Methodology
+Our analyses will leverage the data from the 2020 American National Election 
+Studies (ANES), which is a continuation of the series of election studies 
+conducted since 1948 to support analysis of public opinion and voting behavior 
+in U.S. presidential elections. The 2020 study features re-interviews with 2016 
+ANES respondents, a freshly drawn cross-sectional sample, and post-election 
+surveys with respondents from the General Social Survey (GSS). The study has a 
+total of 8,280 pre-election interviews and 7,449 post-election re-interviews 
+satisfying the criteria of IID. 
+ 
+As previously discussed, there are two major parties in the US; other parties 
+make up a very small percentage and are not considered in this analysis. The 
+respondents are asked for the pre and post-vote party affiliation, as well as 
+questions around the party preference for various offices. Based on the study 
+conducted by Petrocik, voters that initially identified 
+themselves as independent did so to highlight their independent mindedness as 
+opposed to their party affiliation.^[Petrocik “Measuring party support: Learners
+are not independents” (2009)] Further probing with follow-up questions 
+in most cases identified a particular leaning of the respondent toward specific 
+affiliation with varying degree of preference. For our purposes we ignore this 
+and define voter’s affiliation as leaning within any degree of preference 
+toward a specific party. This made the variable V201231x in the ANES data, 
+named party_id in our analysis, as the best available method to summarize the 
+respondent’s lean. It is an unpaired ordinal scale that relates to party 
+affiliation using a range of 1 (Democrat) to 7 (Republican) with 4 as the 
+neutral Independent Voter. Table 1 gives a summary of participant affiliation, 
+and shows no significant difference between the two major parties.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+kable(
+  t(summary(as.factor(df_min$party_id))),
+  digits = 2,
+  caption = 'Party ID', 
+  booktabs = TRUE
+)
+``` 
+We identified voting difficulty by analyzing the V202119 (aka voting_difficulty)
+field that asked the respondent how difficult it was to cast their vote based on
+an ordinal scale. The survey further expanded the voter difficulty question by 
+asking binary follow up questions (V202120 parts a-j aka practical_difficulty) 
+to identify where the voter had difficulty with: registering to vote, obtaining 
+a voter ID card, obtaining an absentee ballot, confusion about the ballot or 
+machine, work schedule conflicts, bad weather, getting to polling location, 
+issues mailing their ballot, long wait times to vote or other difficulties 
+experienced.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+kable(
+  data.frame (
+    variable  = c(
+      "V202120a", 
+      "V202120b",
+      "V202120c",
+      "V202120d",
+      "V202120e",
+      "V202120f",
+      "V202120g",
+      "V202120h",
+      "V202120i",
+      "V202120j"
+    ),
+    description = c(
+      "Difficulty Registering to Vote", 
+      "Obtaining an Acceptable Voter ID Card",
+      "Obtaining an Absentee Ballot",
+      "Confusion about the Ballot or Machine",
+      "Difficulty Getting to Polling Locations",
+      "Long Wait Times",
+      "Work Schedule",
+      "Bad Weather",
+      "Issue Mailing Ballot",
+      "Other Problem"
+    )
+  ),
+  digits = 2,
+  caption = 'Practical Difficulty', 
+  booktabs = TRUE
+)
+```
+To complete our analysis we used the variable V202109 that is a binary question 
+that informs if the respondent voted or not. We found that 86.13% voted while 
+13.87% did not. Since the group of respondents who did not vote did not answer 
+the voting_difficulty question, we wondered if anyone in this subsection 
+experienced such difficulty that they could not or were deterred from casting 
+their vote. To find out we looked at the variables V202123 and V202124 that 
+asked the main reason the respondent did not vote. Given the subjectively 
+evaluated factor of intent, the definition of difficulty applied to our analysis
+is that respondents made all reasonable efforts to participate in the voting but
+had difficulty in doing so, we have skipped response options that allude to no 
+intent to vote.
+
+We sought to determine whether those who responded to the survey did encounter 
+difficulty voting and if those who intended to vote also experienced some degree
+of difficulty based on party affiliation. The One-Sided Wilcoxon Rank-Sum Test 
+was determined to be the best choice based on the assumptions of ordinal, 
+unpaired data and shapes as supported by Figure 1.
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE, fig.cap="Voting Difficulty by Party ID Distribution Shapes"}
+#Are they identically distributed? 
+hist(as.numeric(df_min$voting_difficulty[df_min$party_id == 'Democrat']), 
+     main='Democrat Voters', xlab="Perceived Difficulty")
+hist(as.numeric(df_min$voting_difficulty[df_min$party_id == 'Republican']), 
+     main='Republican Voters', xlab="Perceived Difficulty")
+
+```
+\newpage
+We defined the following hypotheses for the tests:
+
+**Null Hypothesis:** _For voters in the 2020 election who identified as Democrats there was no reported difference in voting difficulty compared to Republican voters._ 
+ 
+**Alternative Hypothesis:** _For voters in the 2020 election who identified as Democrats there was a reported difference in voting difficulty compared to Republican voters._
+
+In order to try and capture the effect of voting difficulty between parties we conducted the following tests: The first test looked at non-voters and non-voted combined difficulty (aka nvcombined_difficulty), derived through binary calculation as follows: $$2\cdot I_{main} + I_{other}$$ The second test was based directly on self-reported (i.e. perceived) voting difficulty (aka voting_difficulty). The third test utilized practical difficulty (aka practical_difficulty) that we defined as the overall count of difficulty indicators the respondent identified in the survey.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# filter down data to only Democrat or Republican voters that did not vote
+# conduct the test on nvcombined_difficulty variable, using party id as a 
+# factor.
+# The test we run is one-sided under alternative of having greater difficulty
+# for Democrats to vote.
+# H0: Democrats had less or the same difficulty voting as Republicans
+# Alpha = 0.05
+df_nv <- df_min %>%
+  filter((party_id == "Democrat" | party_id == "Republican") & voted == 0)
+
+wilcox.test(as.numeric(nvcombined_difficulty) ~ as.factor(party_id), data=df_nv, alternative = 'g')
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# filter down data to only Democrat or Republican voters that did vote
+# conduct the test on voting_difficulty variable (perceived), using party id 
+# as a factor.
+# The test we run is one-sided under alternative of having greater difficulty
+# for Democrats to vote.
+# H0: Democrats had less or the same difficulty voting as Republicans
+# Alpha = 0.05
+#
+df_v <- df_min %>%
+  filter((party_id == "Democrat" | party_id == "Republican") & voted == 1)
+
+wilcox.test(as.numeric(voting_difficulty) ~ as.factor(party_id), data=df_v, 
+            alternative = 'g')
+
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# effect size
+wilcox_effsize(voting_difficulty ~ party_id, data=df_v, 
+            alternative = 'g')
+```
+
+``` {r, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# Percentages for each voter identity group w/ little difficulty or above 
+sum(df_v$voting_difficulty[df_v$party_id == 'Democrat'] > 1)/length(df_v$voting_difficulty[df_v$party_id == 'Democrat']) - 
+sum(df_v$voting_difficulty[df_v$party_id == 'Republican'] > 1)/length(df_v$voting_difficulty[df_v$party_id == 'Republican'])
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# filter down data to only Democrat or Republican voters that did vote
+# conduct the test on vpractical_difficulty variable (reported number of 
+# difficulties), using party id as a factor.
+# The test we run is one-sided under alternative of having greater difficulty
+# for Democrats to vote.
+# H0: Democrats had less or the same difficulty voting as Republicans
+# Alpha = 0.05
+#
+df_v <- df_min %>%
+  filter((party_id == "Democrat" | party_id == "Republican") & voted == 1)
+
+wilcox.test(as.numeric(vpractical_difficulty) ~ as.factor(party_id), data=df_v, 
+            alternative = 'g')
+
+```
+
+```{r checking counts of available data to work with, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+sum(df_min$voted & df_min$party_id == 'Democrat')
+sum(df_min$voted & df_min$party_id == 'Republican')
+sum(df_min$voted & df_min$party_id == 'Unknown')
+```
+
+```{r counting those who responded voting difficulty and didnt vote, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+sum(df_min$voted == 1 & df_min$voting_difficulty > 0, na.rm=TRUE)
+# did not vote and stated that they had some kind of difficulty voting
+sum(df_min$voted == 0 & df_min$voting_difficulty > 0, na.rm=TRUE)
+
+#what are the sample sizes between the two parties? 
+sum(df_min$party_id == 'Democrat' & df_min$voting_difficulty > 0, na.rm=TRUE)
+sum(df_min$party_id == 'Republican' & df_min$voting_difficulty > 0, na.rm=TRUE)
+```
+
+```{r filering information where a result for voting difficulty was provided, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# how much data will be working with? 
+filter(df_min, party_id == 'Republican' | party_id == 'Democrat')
+```
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE, fig.show='hide', results=FALSE}
+#Are they identically distributed? 
+hist(as.numeric(df_min$nvcombined_difficulty[df_min$party_id == 'Democrat']), 
+     main='Democrat Non-Voters', xlab="Difficulty")
+hist(as.numeric(df_min$nvcombined_difficulty[df_min$party_id == 'Republican']), 
+     main='Republican Non-Voters', xlab="Difficulty")
+```
+
+```{r fig.show="hold", out.width="50%", echo=FALSE, warning=FALSE, message=FALSE, fig.show='hide', results=FALSE}
+#Are they identically distributed? 
+hist(as.numeric(df_min$vpractical_difficulty[df_min$party_id == 'Democrat']), 
+     main='Democrat Voters', xlab="Practical Difficulty")
+hist(as.numeric(df_min$vpractical_difficulty[df_min$party_id == 'Republican']), 
+     main='Republican Voters', xlab="Practical Difficulty")
+```
+# Results
+Based on the defined hypothesis we ran three tests with the following results: 
+
+**Non-voted combined difficulty indicator test results:** Based on the p-value 
+of 0.3242 we have **failed to reject** the null toward the alternative 
+hypothesis, that it is more difficult to vote for Democrat voters (vs. 
+Republican) for the participants under the unweighted sub-population that did 
+not vote with significance level $\alpha$ of 5%.
+ 
+**Voted (perceived, self-reported) difficulty indicator test results:** We 
+obtained a statistically significant test result based on the p-value of 
+0.00177. As such, we have **rejected** the null toward the alternative 
+hypothesis, that it is more difficult to vote for Democrat voters (vs. 
+Republican) for the participants under the unweighted sub-population that did 
+vote with significance level $\alpha$ of 5%. Further, the effect size based on 
+normal approximation is 3.8% which is small in magnitude. This is also supported
+by the fact that there is only a 2.5% difference between fraction of Democrats 
+and fraction of Republicans that experienced difficulty.
+
+**Voted practical difficulty indicator test results:** Based on the p-value of 
+0.23, though borderline, we have **failed to reject** the null toward the 
+alternative hypothesis that it is more difficult to vote for Democrat voters 
+(vs. Republican) for the participants under the unweighted sub-population that 
+did vote with significance level $\alpha$ of 5%.
+
+# Discussion
+The analysis performed indicated that there was a statistically significant 
+difference in difficulty voting between respondents who identified as Democrat 
+versus Republicans. However, we could not find any practical significance for 
+the discovered effect. 
+
+These results are a strong indicator that voters had equitable access to cast 
+their vote despite the challenges associated with unconventional voting 
+methodologies incorporated due to the unique circumstances at the time. Not 
+enough evidence was found to support the narrative that any party gained a 
+political advantage in the election.
+
+
+However, it is understood that there is an underlying complexity of difficulty 
+experienced. It may be composed of cognitive, physical, or psychological 
+factors. To improve research method, an instrument similar to the academic 
+persistence scale should be utilized in the future to properly capture voting 
+difficulty experienced by the respondents and improve the power of the test and 
+potentially lead to stronger measure of effect.^[Thalib, Tarmizi & Hanafi, Sekar
+& Asyraf, M Fahmi & Irbah, Shidqi & J.S, Eduardus. (2018). The Academic 
+Persistence Scale.]
+
+
+
